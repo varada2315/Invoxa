@@ -15,7 +15,7 @@ import {
   Users,
   ShoppingCart,
   CreditCard,
-  Type,
+  Image as ImageIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -47,9 +47,9 @@ function uid() {
 }
 
 const THEMES = [
-  { id: "lavender", name: "Lavender Dream", colors: "from-violet-100 to-white", accent: "text-violet-600", bg: "bg-violet-50" },
-  { id: "mint", name: "Minty Fresh", colors: "from-emerald-100 to-white", accent: "text-emerald-600", bg: "bg-emerald-50" },
-  { id: "sunset", name: "Peach Sunset", colors: "from-orange-100 to-white", accent: "text-orange-600", bg: "bg-orange-50" },
+  { id: "lavender", name: "Lavender Dream", colors: "from-violet-100 to-white", accent: "text-violet-600", bg: "bg-violet-50", primary: "bg-violet-600" },
+  { id: "mint", name: "Minty Fresh", colors: "from-emerald-100 to-white", accent: "text-emerald-600", bg: "bg-emerald-50", primary: "bg-emerald-600" },
+  { id: "sunset", name: "Peach Sunset", colors: "from-orange-100 to-white", accent: "text-orange-600", bg: "bg-orange-50", primary: "bg-orange-600" },
 ];
 
 const FONTS = [
@@ -84,16 +84,19 @@ export default function InvoiceStudio() {
     { id: uid(), description: "Design & layout", qty: 1, unitPrice: 4999 },
   ]);
 
-  // Tax & Payments
+  // Tax & Payments & Status
   const [taxMode, setTaxMode] = useState<TaxMode>("gst");
   const [taxRate, setTaxRate] = useState<number>(18);
+  const [discount, setDiscount] = useState<number>(0);
   const [paymentType, setPaymentType] = useState<"upi" | "cash" | "bank">("upi");
   const [paymentDetails, setPaymentDetails] = useState("lavender@upi");
+  const [isPaid, setIsPaid] = useState<boolean>(false);
 
   // Calculations
   const subtotal = useMemo(() => items.reduce((acc, it) => acc + (it.qty * it.unitPrice), 0), [items]);
-  const taxAmount = useMemo(() => (taxMode === "none" ? 0 : subtotal * (taxRate / 100)), [taxMode, taxRate, subtotal]);
-  const total = subtotal + taxAmount;
+  const discountedSubtotal = Math.max(0, subtotal - discount);
+  const taxAmount = useMemo(() => (taxMode === "none" ? 0 : discountedSubtotal * (taxRate / 100)), [taxMode, taxRate, discountedSubtotal]);
+  const total = discountedSubtotal + taxAmount;
 
   const progress = (step / 5) * 100;
 
@@ -105,12 +108,104 @@ export default function InvoiceStudio() {
     { title: "Client", icon: Users },
     { title: "Items", icon: ShoppingCart },
     { title: "Style", icon: Palette },
-    { title: "Payment", icon: CreditCard },
+    { title: "Finalize", icon: CreditCard },
   ];
 
+  const onLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSender({ ...sender, logoDataUrl: reader.result as string });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   return (
-    <div className={cn("min-h-screen transition-colors duration-500", theme.bg, font.family)}>
-      <div className="mx-auto max-w-4xl px-4 py-8">
+    <div className={cn("min-h-screen transition-colors duration-500 pb-20", theme.bg, font.family)}>
+      {/* Print-only View */}
+      <div className="hidden print:block p-10 bg-white min-h-screen">
+        <div className="flex justify-between items-start mb-10">
+          <div className="flex items-center gap-4">
+            {sender.logoDataUrl && <img src={sender.logoDataUrl} alt="Logo" className="h-16 w-16 object-contain" />}
+            <div>
+              <h1 className="text-3xl font-display">{sender.businessName}</h1>
+              <p className="text-sm text-gray-600">{sender.address}</p>
+              <p className="text-sm text-gray-600">{sender.email} | {sender.phone}</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <h2 className="text-4xl font-display mb-2">INVOICE</h2>
+            <div className={cn("inline-block px-4 py-1 rounded-full text-white font-bold text-sm mb-2", isPaid ? "bg-emerald-500" : "bg-orange-500")}>
+              {isPaid ? "PAID" : "UNPAID"}
+            </div>
+            <p className="text-sm font-medium">Date: {format(new Date(), "dd MMM yyyy")}</p>
+          </div>
+        </div>
+
+        <div className="mb-10">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">BILL TO</h3>
+          <p className="font-bold text-lg">{client.name}</p>
+          <p className="text-sm text-gray-600">{client.email}</p>
+          <p className="text-sm text-gray-600">{client.address}</p>
+        </div>
+
+        <table className="w-full mb-10">
+          <thead>
+            <tr className="border-b-2 border-gray-100 text-left">
+              <th className="py-4 text-xs font-bold text-gray-400 uppercase">Description</th>
+              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-center">Qty</th>
+              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-right">Price</th>
+              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {items.map((it) => (
+              <tr key={it.id}>
+                <td className="py-4 font-medium">{it.description}</td>
+                <td className="py-4 text-center">{it.qty}</td>
+                <td className="py-4 text-right">₹{money(it.unitPrice)}</td>
+                <td className="py-4 text-right font-bold">₹{money(it.qty * it.unitPrice)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="flex justify-end">
+          <div className="w-64 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Subtotal</span>
+              <span>₹{money(subtotal)}</span>
+            </div>
+            {discount > 0 && (
+              <div className="flex justify-between text-sm text-emerald-600">
+                <span>Discount</span>
+                <span>- ₹{money(discount)}</span>
+              </div>
+            )}
+            {taxMode !== "none" && (
+              <div className="flex justify-between text-sm">
+                <span>GST (18%)</span>
+                <span>₹{money(taxAmount)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-xl font-bold border-t pt-2">
+              <span>Total</span>
+              <span>₹{money(total)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-20 p-6 rounded-2xl bg-gray-50 border border-gray-100">
+          <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Payment Details</h4>
+          <p className="text-sm">Method: <span className="font-bold uppercase">{paymentType}</span></p>
+          <p className="text-sm">Details: <span className="font-bold">{paymentDetails}</span></p>
+        </div>
+      </div>
+
+      {/* App Interface */}
+      <div className="print:hidden mx-auto max-w-4xl px-4 py-8">
         {/* Progress Header */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-4">
@@ -142,7 +237,20 @@ export default function InvoiceStudio() {
             {step === 1 && (
               <Card className="cartoon-card border bg-white p-6 rounded-3xl">
                 <h2 className="font-display text-2xl mb-6">Business Details</h2>
-                <div className="grid gap-4">
+                <div className="grid gap-6">
+                  <div className="flex items-center gap-6 p-4 border rounded-2xl bg-gray-50/50">
+                    <div className="h-24 w-24 rounded-2xl border bg-white flex items-center justify-center overflow-hidden">
+                      {sender.logoDataUrl ? (
+                        <img src={sender.logoDataUrl} alt="Logo" className="h-full w-full object-contain" />
+                      ) : (
+                        <ImageIcon className="h-8 w-8 text-gray-300" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-sm font-medium block mb-2">Business Logo</label>
+                      <Input type="file" accept="image/*" onChange={onLogoChange} className="rounded-xl" />
+                    </div>
+                  </div>
                   <div>
                     <label className="text-sm font-medium">Business Name</label>
                     <Input value={sender.businessName} onChange={e => setSender({...sender, businessName: e.target.value})} className="rounded-2xl mt-1" />
@@ -227,27 +335,34 @@ export default function InvoiceStudio() {
                   </Button>
                 </div>
 
-                <div className="p-4 border rounded-2xl bg-violet-50/30">
-                  <h3 className="font-bold mb-4">Indian Taxation (GST)</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium">Tax Mode</label>
-                      <Select value={taxMode} onValueChange={(v: TaxMode) => setTaxMode(v)}>
-                        <SelectTrigger className="rounded-xl mt-1 bg-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="gst">GST (18%)</SelectItem>
-                          <SelectItem value="none">No Tax</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <div className="text-right">
-                        <div className="text-sm text-muted-foreground">Subtotal: ₹{money(subtotal)}</div>
-                        <div className="text-sm text-muted-foreground">GST (18%): ₹{money(taxAmount)}</div>
-                        <div className="text-xl font-display mt-2">Total: ₹{money(total)}</div>
+                <div className="p-6 border rounded-2xl bg-violet-50/30">
+                  <div className="grid grid-cols-2 gap-8">
+                    <div className="space-y-4">
+                      <h3 className="font-bold">Adjustments</h3>
+                      <div>
+                        <label className="text-sm font-medium">Discount (₹)</label>
+                        <Input type="number" value={discount} onChange={e => setDiscount(Number(e.target.value))} className="rounded-xl mt-1 bg-white" placeholder="0.00" />
                       </div>
+                      <div>
+                        <label className="text-sm font-medium">Tax Mode</label>
+                        <Select value={taxMode} onValueChange={(v: TaxMode) => setTaxMode(v)}>
+                          <SelectTrigger className="rounded-xl mt-1 bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="gst">GST (18%)</SelectItem>
+                            <SelectItem value="none">No Tax</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="flex flex-col justify-end text-right">
+                      <div className="space-y-1">
+                        <div className="text-sm text-muted-foreground">Subtotal: ₹{money(subtotal)}</div>
+                        {discount > 0 && <div className="text-sm text-emerald-600">Discount: - ₹{money(discount)}</div>}
+                        {taxMode !== "none" && <div className="text-sm text-muted-foreground">GST (18%): ₹{money(taxAmount)}</div>}
+                      </div>
+                      <div className="text-2xl font-display mt-4 p-4 rounded-2xl bg-white border">Total: ₹{money(total)}</div>
                     </div>
                   </div>
                 </div>
@@ -299,46 +414,68 @@ export default function InvoiceStudio() {
               </Card>
             )}
 
-            {/* Step 5: Payment & Finalize */}
+            {/* Step 5: Finalize */}
             {step === 5 && (
               <Card className="cartoon-card border bg-white p-6 rounded-3xl">
                 <h2 className="font-display text-2xl mb-6">Finalize & Payment</h2>
                 <div className="grid gap-6">
-                  <div className="p-5 border rounded-3xl bg-gray-50">
-                    <label className="text-sm font-medium mb-3 block">Payment Method</label>
-                    <div className="flex gap-2">
-                      {['upi', 'bank', 'cash'].map(m => (
-                        <Button
-                          key={m}
-                          variant={paymentType === m ? "default" : "secondary"}
-                          className="flex-1 rounded-2xl"
-                          onClick={() => setPaymentType(m as any)}
-                        >
-                          {m.toUpperCase()}
-                        </Button>
-                      ))}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-5 border rounded-3xl bg-gray-50">
+                      <label className="text-sm font-medium mb-3 block">Payment Method</label>
+                      <div className="flex gap-2">
+                        {['upi', 'bank', 'cash'].map(m => (
+                          <Button
+                            key={m}
+                            variant={paymentType === m ? "default" : "secondary"}
+                            className="flex-1 rounded-2xl"
+                            onClick={() => setPaymentType(m as any)}
+                          >
+                            {m.toUpperCase()}
+                          </Button>
+                        ))}
+                      </div>
+                      <div className="mt-4">
+                        <label className="text-xs font-bold uppercase text-muted-foreground">Payment Details</label>
+                        <Input
+                          value={paymentDetails}
+                          onChange={e => setPaymentDetails(e.target.value)}
+                          className="rounded-xl mt-1"
+                          placeholder="UPI ID or Bank details"
+                        />
+                      </div>
                     </div>
-                    <div className="mt-4">
-                      <label className="text-xs font-bold uppercase text-muted-foreground">Payment Details (ID / Acc No)</label>
-                      <Input
-                        value={paymentDetails}
-                        onChange={e => setPaymentDetails(e.target.value)}
-                        className="rounded-xl mt-1"
-                        placeholder="Enter UPI ID or Bank details"
-                      />
+                    <div className="p-5 border rounded-3xl bg-gray-50">
+                      <label className="text-sm font-medium mb-3 block">Invoice Status</label>
+                      <div className="flex gap-2">
+                        <Button
+                          variant={!isPaid ? "default" : "secondary"}
+                          className={cn("flex-1 rounded-2xl", !isPaid && "bg-orange-500 hover:bg-orange-600")}
+                          onClick={() => setIsPaid(false)}
+                        >
+                          UNPAID
+                        </Button>
+                        <Button
+                          variant={isPaid ? "default" : "secondary"}
+                          className={cn("flex-1 rounded-2xl", isPaid && "bg-emerald-500 hover:bg-emerald-600")}
+                          onClick={() => setIsPaid(true)}
+                        >
+                          PAID
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-4">This will be printed on the final invoice document.</p>
                     </div>
                   </div>
 
                   <div className={cn("p-8 rounded-3xl border-2 border-dashed flex flex-col items-center justify-center text-center", theme.colors)}>
                     <CheckCircle2 className={cn("h-16 w-16 mb-4", theme.accent)} />
-                    <h3 className="font-display text-2xl">Ready to Go!</h3>
+                    <h3 className="font-display text-2xl">Perfect!</h3>
                     <p className="text-sm text-muted-foreground mt-2">Your professional invoice for ₹{money(total)} is ready.</p>
                     <div className="mt-8 flex gap-4 w-full">
-                      <Button className="flex-1 rounded-2xl h-14 text-lg" onClick={() => window.print()}>
-                        <Printer className="mr-2 h-5 w-5" /> Print / PDF
+                      <Button className={cn("flex-1 rounded-2xl h-14 text-lg text-white", theme.primary)} onClick={() => window.print()}>
+                        <Printer className="mr-2 h-5 w-5" /> Print / Save PDF
                       </Button>
-                      <Button variant="outline" className="flex-1 rounded-2xl h-14 text-lg" onClick={() => alert("Downloaded!")}>
-                        <Download className="mr-2 h-5 w-5" /> Download
+                      <Button variant="outline" className="flex-1 rounded-2xl h-14 text-lg border-2" onClick={() => window.print()}>
+                        <Download className="mr-2 h-5 w-5" /> Download PDF
                       </Button>
                     </div>
                   </div>
@@ -349,7 +486,7 @@ export default function InvoiceStudio() {
         </AnimatePresence>
 
         {/* Navigation Buttons */}
-        <div className="mt-8 flex justify-between">
+        <div className="print:hidden mt-8 flex justify-between">
           <Button
             variant="ghost"
             onClick={prevStep}
@@ -361,7 +498,7 @@ export default function InvoiceStudio() {
           {step < 5 && (
             <Button
               onClick={nextStep}
-              className="rounded-full px-8 h-12 bg-primary hover:bg-primary/90"
+              className={cn("rounded-full px-8 h-12 text-white", theme.primary)}
             >
               Continue <ChevronRight className="ml-2 h-4 w-4" />
             </Button>
@@ -371,9 +508,10 @@ export default function InvoiceStudio() {
 
       <style>{`
         @media print {
-          .mx-auto { max-width: 100% !important; padding: 0 !important; }
-          button, .Progress, .ChevronLeft, .ChevronRight, h1, .mb-12 { display: none !important; }
-          .cartoon-card { border: none !important; box-shadow: none !important; }
+          @page { size: auto; margin: 0; }
+          body { background: white !important; margin: 0; padding: 0; }
+          .print\\:hidden { display: none !important; }
+          .print\\:block { display: block !important; }
         }
       `}</style>
     </div>
