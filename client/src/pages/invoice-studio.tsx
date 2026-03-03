@@ -90,6 +90,7 @@ export default function InvoiceStudio() {
   const [discount, setDiscount] = useState<number>(0);
   const [paymentType, setPaymentType] = useState<"upi" | "cash" | "bank">("upi");
   const [paymentDetails, setPaymentDetails] = useState("lavender@upi");
+  const [transactionId, setTransactionId] = useState("");
   const [isPaid, setIsPaid] = useState<boolean>(false);
 
   // Calculations
@@ -201,6 +202,9 @@ export default function InvoiceStudio() {
           <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Payment Details</h4>
           <p className="text-sm">Method: <span className="font-bold uppercase">{paymentType}</span></p>
           <p className="text-sm">Details: <span className="font-bold">{paymentDetails}</span></p>
+          {isPaid && transactionId && (
+            <p className="text-sm">Transaction ID: <span className="font-bold">{transactionId}</span></p>
+          )}
         </div>
       </div>
 
@@ -462,6 +466,17 @@ export default function InvoiceStudio() {
                           PAID
                         </Button>
                       </div>
+                      {isPaid && (
+                        <div className="mt-4">
+                          <label className="text-xs font-bold uppercase text-rose-500">Transaction ID (Required)*</label>
+                          <Input
+                            value={transactionId}
+                            onChange={e => setTransactionId(e.target.value)}
+                            className="rounded-xl mt-1 border-rose-200 focus-visible:ring-rose-500"
+                            placeholder="Enter transaction reference"
+                          />
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground mt-4">This will be printed on the final invoice document.</p>
                     </div>
                   </div>
@@ -471,13 +486,25 @@ export default function InvoiceStudio() {
                     <h3 className="font-display text-2xl">Perfect!</h3>
                     <p className="text-sm text-muted-foreground mt-2">Your professional invoice for ₹{money(total)} is ready.</p>
                     <div className="mt-8 flex gap-4 w-full">
-                      <Button className={cn("flex-1 rounded-2xl h-14 text-lg text-white", theme.primary)} onClick={() => window.print()}>
+                      <Button 
+                        className={cn("flex-1 rounded-2xl h-14 text-lg text-white", theme.primary)} 
+                        onClick={() => window.print()}
+                        disabled={isPaid && !transactionId}
+                      >
                         <Printer className="mr-2 h-5 w-5" /> Print / Save PDF
                       </Button>
-                      <Button variant="outline" className="flex-1 rounded-2xl h-14 text-lg border-2" onClick={() => window.print()}>
+                      <Button 
+                        variant="outline" 
+                        className="flex-1 rounded-2xl h-14 text-lg border-2" 
+                        onClick={() => window.print()}
+                        disabled={isPaid && !transactionId}
+                      >
                         <Download className="mr-2 h-5 w-5" /> Download PDF
                       </Button>
                     </div>
+                    {isPaid && !transactionId && (
+                      <p className="text-xs text-rose-500 mt-4 font-bold">Please enter a Transaction ID to generate the invoice.</p>
+                    )}
                   </div>
                 </div>
               </Card>
