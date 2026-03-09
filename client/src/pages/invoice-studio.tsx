@@ -1,15 +1,18 @@
 import { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import {
   Plus,
   Trash2,
-  Sparkles,
   Download,
   Printer,
   ChevronRight,
   ChevronLeft,
   CheckCircle2,
+  CircleDollarSign,
+  Save,
   Palette,
   Briefcase,
   Users,
@@ -29,13 +32,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import type {
+  Invoice,
+  InvoiceTemplate,
+  InvoiceTemplateData,
+  InsertInvoice,
+  InsertInvoiceTemplate,
+} from "@shared/schema";
 
 type TaxMode = "none" | "gst" | "vat";
 type LineItem = { id: string; description: string; qty: number; unitPrice: number };
 type Client = { id: string; name: string; email: string; address: string };
+type PaymentDetails = InsertInvoice["paymentDetails"];
 
 function money(n: number) {
   if (!Number.isFinite(n)) return "0.00";
@@ -56,6 +68,15 @@ const FONTS = [
   { id: "display", name: "Cartoonish", family: "font-display" },
   { id: "sans", name: "Modern Sans", family: "font-sans" },
 ];
+
+const THEME_BY_ID = new Map(THEMES.map((theme) => [theme.id, theme]));
+const FONT_BY_ID = new Map(FONTS.map((font) => [font.id, font]));
+const EMPTY_BANK_DETAILS = {
+  accountName: "",
+  accountNumber: "",
+  ifscOrSwift: "",
+  bankName: "",
+};
 
 export default function InvoiceStudio() {
   const [step, setStep] = useState(1);
@@ -89,15 +110,151 @@ export default function InvoiceStudio() {
   const [taxRate, setTaxRate] = useState<number>(18);
   const [discount, setDiscount] = useState<number>(0);
   const [paymentType, setPaymentType] = useState<"upi" | "cash" | "bank">("upi");
-  const [paymentDetails, setPaymentDetails] = useState("lavender@upi");
+  const [paymentDetails, setPaymentDetails] = useState<PaymentDetails>({
+    sender: {
+      upiId: "lavender@upi",
+      bankDetails: { ...EMPTY_BANK_DETAILS },
+    },
+    receiver: {
+      upiId: "",
+      bankDetails: { ...EMPTY_BANK_DETAILS },
+    },
+  });
   const [transactionId, setTransactionId] = useState("");
   const [isPaid, setIsPaid] = useState<boolean>(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("none");
+  const [hasDownloadedInvoice, setHasDownloadedInvoice] = useState(false);
+  const { toast } = useToast();
+
+  const { data: templates = [] } = useQuery<InvoiceTemplate[]>({
+    queryKey: ["/api/invoice-templates"],
+  });
+  const { data: invoices = [] } = useQuery<Invoice[]>({
+    queryKey: ["/api/invoices"],
+  });
+
+  const saveTemplateMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const payload: InsertInvoiceTemplate = {
+        name,
+        data: {
+          sender,
+          items: items.map(({ description, qty, unitPrice }) => ({
+            description,
+            qty,
+            unitPrice,
+          })),
+          taxMode,
+          taxRate,
+          discount,
+          paymentType,
+          paymentDetails,
+          themeId: theme.id,
+          fontId: font.id,
+        },
+      };
+
+      const res = await apiRequest("POST", "/api/invoice-templates", payload);
+      return (await res.json()) as InvoiceTemplate;
+    },
+    onSuccess: (savedTemplate) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoice-templates"] });
+      setSelectedTemplateId(savedTemplate.id);
+      toast({
+        title: "Template saved",
+        description: `"${savedTemplate.name}" is now available in Use Template.`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Failed to save template",
+        description: error instanceof Error ? error.message : "Unexpected error",
+        variant: "destructive",
+      });
+    },
+  });
+  const saveInvoiceMutation = useMutation({
+    mutationFn: async () => {
+      const payload: InsertInvoice = {
+        status: isPaid ? "paid" : "unpaid",
+        sender,
+        client,
+        items: items.map(({ description, qty, unitPrice }) => ({
+          description,
+          qty,
+          unitPrice,
+        })),
+        taxMode,
+        taxRate,
+        discount,
+        paymentType,
+        paymentDetails,
+        transactionId,
+        total,
+        themeId: theme.id,
+        fontId: font.id,
+      };
+
+      const res = await apiRequest("POST", "/api/invoices", payload);
+      return (await res.json()) as Invoice;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({
+        title: "Invoice saved",
+        description: "Invoice status and details were stored successfully.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Failed to save invoice",
+        description: error instanceof Error ? error.message : "Unexpected error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const markInvoicePaidMutation = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const res = await apiRequest("PATCH", `/api/invoices/${invoiceId}/status`, {
+        status: "paid",
+      });
+      return (await res.json()) as Invoice;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({
+        title: "Invoice updated",
+        description: "Invoice status changed to paid.",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Failed to update status",
+        description: error instanceof Error ? error.message : "Unexpected error",
+        variant: "destructive",
+      });
+    },
+  });
 
   // Calculations
   const subtotal = useMemo(() => items.reduce((acc, it) => acc + (it.qty * it.unitPrice), 0), [items]);
   const discountedSubtotal = Math.max(0, subtotal - discount);
   const taxAmount = useMemo(() => (taxMode === "none" ? 0 : discountedSubtotal * (taxRate / 100)), [taxMode, taxRate, discountedSubtotal]);
   const total = discountedSubtotal + taxAmount;
+  const amountPaid = isPaid ? total : 0;
+  const balanceDue = Math.max(0, total - amountPaid);
+  const printableItems = items.slice(0, 10);
+  const hiddenItemCount = Math.max(0, items.length - printableItems.length);
+  const invoiceNumber = useMemo(
+    () => `INV-${format(new Date(), "yyyyMMdd")}-${String(items.length).padStart(2, "0")}`,
+    [items.length],
+  );
+  const dueDate = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 14);
+    return date;
+  }, []);
 
   const progress = (step / 5) * 100;
 
@@ -123,98 +280,227 @@ export default function InvoiceStudio() {
     }
   };
 
+  const updateUpiId = (party: "sender" | "receiver", value: string) => {
+    setPaymentDetails((prev) => ({
+      ...prev,
+      [party]: {
+        ...prev[party],
+        upiId: value,
+      },
+    }));
+  };
+
+  const updateBankDetail = (
+    party: "sender" | "receiver",
+    field: "accountName" | "accountNumber" | "ifscOrSwift" | "bankName",
+    value: string,
+  ) => {
+    setPaymentDetails((prev) => ({
+      ...prev,
+      [party]: {
+        ...prev[party],
+        bankDetails: {
+          ...prev[party].bankDetails,
+          [field]: value,
+        },
+      },
+    }));
+  };
+
+  const applyTemplate = (templateData: InvoiceTemplateData) => {
+    setSender(templateData.sender);
+    setItems(
+      templateData.items.map((item) => ({
+        ...item,
+        id: uid(),
+      })),
+    );
+    setTaxMode(templateData.taxMode);
+    setTaxRate(templateData.taxRate);
+    setDiscount(templateData.discount);
+    setPaymentType(templateData.paymentType);
+    setPaymentDetails(templateData.paymentDetails);
+    setTheme(THEME_BY_ID.get(templateData.themeId) ?? THEMES[0]);
+    setFont(FONT_BY_ID.get(templateData.fontId) ?? FONTS[0]);
+    setStep(1);
+  };
+
+  const onTemplateSelect = (value: string) => {
+    setSelectedTemplateId(value);
+    if (value === "none") {
+      return;
+    }
+
+    const selectedTemplate = templates.find((template) => template.id === value);
+    if (!selectedTemplate) {
+      return;
+    }
+
+    applyTemplate(selectedTemplate.data);
+    toast({
+      title: "Template applied",
+      description: "Layout and business defaults loaded. Client details were kept.",
+    });
+  };
+
+  const onSaveTemplate = () => {
+    const name = window.prompt("Template name");
+    const normalizedName = name?.trim();
+    if (!normalizedName) {
+      return;
+    }
+
+    saveTemplateMutation.mutate(normalizedName);
+  };
+
+  const onSaveInvoice = () => {
+    if (isPaid && !transactionId.trim()) {
+      toast({
+        title: "Transaction ID required",
+        description: "Enter transaction ID before saving a paid invoice.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    saveInvoiceMutation.mutate();
+  };
+
   return (
     <div className={cn("min-h-screen transition-colors duration-500 pb-20", theme.bg, font.family)}>
       {/* Print-only View */}
-      <div className="hidden print:block p-10 bg-white min-h-screen">
-        <div className="flex justify-between items-start mb-10">
-          <div className="flex items-center gap-4">
-            {sender.logoDataUrl && <img src={sender.logoDataUrl} alt="Logo" className="h-16 w-16 object-contain" />}
-            <div>
-              <h1 className="text-3xl font-display">{sender.businessName}</h1>
-              <p className="text-sm text-gray-600">{sender.address}</p>
-              <p className="text-sm text-gray-600">{sender.email} | {sender.phone}</p>
-            </div>
+      <div className="invoice-container hidden print:block bg-white text-black">
+        <div className="invoice-header page-break">
+          <div className="invoice-header-left">
+            {sender.logoDataUrl && (
+              <img src={sender.logoDataUrl} alt="Logo" className="invoice-logo" />
+            )}
+            <h1 className="invoice-company-name">{sender.businessName}</h1>
           </div>
-          <div className="text-right">
-            <h2 className="text-4xl font-display mb-2">INVOICE</h2>
-            <div className={cn("inline-block px-4 py-1 rounded-full text-white font-bold text-sm mb-2", isPaid ? "bg-emerald-500" : "bg-orange-500")}>
-              {isPaid ? "PAID" : "UNPAID"}
-            </div>
-            <p className="text-sm font-medium">Date: {format(new Date(), "dd MMM yyyy")}</p>
+          <div className="invoice-header-right">
+            <h2 className="invoice-title">Invoice</h2>
+            <p><span>Invoice #:</span> {invoiceNumber}</p>
+            <p><span>Date:</span> {format(new Date(), "dd MMM yyyy")}</p>
+            <p><span>Due Date:</span> {format(dueDate, "dd MMM yyyy")}</p>
+            <p>
+              <span>Status:</span>{" "}
+              <strong>{isPaid ? "Paid" : "Unpaid"}</strong>
+            </p>
           </div>
         </div>
 
-        <div className="mb-10">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">BILL TO</h3>
-          <p className="font-bold text-lg">{client.name}</p>
-          <p className="text-sm text-gray-600">{client.email}</p>
-          <p className="text-sm text-gray-600">{client.address}</p>
+        <div className="invoice-billing page-break">
+          <div>
+            <h3>Bill From</h3>
+            <p>{sender.businessName}</p>
+            <p>{sender.address}</p>
+            <p>{sender.email}</p>
+            <p>{sender.phone}</p>
+          </div>
+          <div>
+            <h3>Bill To</h3>
+            <p>{client.name}</p>
+            <p>{client.address}</p>
+            <p>{client.email}</p>
+            <p>{"phone" in client ? (client as { phone?: string }).phone || "-" : "-"}</p>
+          </div>
         </div>
 
-        <table className="w-full mb-10">
-          <thead>
-            <tr className="border-b-2 border-gray-100 text-left">
-              <th className="py-4 text-xs font-bold text-gray-400 uppercase">Description</th>
-              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-center">Qty</th>
-              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-right">Price</th>
-              <th className="py-4 text-xs font-bold text-gray-400 uppercase text-right">Total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td className="py-4 font-medium">{it.description}</td>
-                <td className="py-4 text-center">{it.qty}</td>
-                <td className="py-4 text-right">₹{money(it.unitPrice)}</td>
-                <td className="py-4 text-right font-bold">₹{money(it.qty * it.unitPrice)}</td>
+        <div className="page-break">
+          <table className="invoice-table">
+            <thead>
+              <tr>
+                <th style={{ width: "25%" }}>Item</th>
+                <th style={{ width: "35%" }}>Description</th>
+                <th style={{ width: "10%" }}>Qty</th>
+                <th style={{ width: "15%" }}>Price</th>
+                <th style={{ width: "15%" }}>Amount</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-
-        <div className="flex justify-end">
-          <div className="w-64 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-500">Subtotal</span>
-              <span>₹{money(subtotal)}</span>
-            </div>
-            {discount > 0 && (
-              <div className="flex justify-between text-sm text-emerald-600">
-                <span>Discount</span>
-                <span>- ₹{money(discount)}</span>
-              </div>
-            )}
-            {taxMode !== "none" && (
-              <div className="flex justify-between text-sm">
-                <span>GST (18%)</span>
-                <span>₹{money(taxAmount)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-xl font-bold border-t pt-2">
-              <span>Total</span>
-              <span>₹{money(total)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-20 p-6 rounded-2xl bg-gray-50 border border-gray-100">
-          <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Payment Details</h4>
-          <p className="text-sm">Method: <span className="font-bold uppercase">{paymentType}</span></p>
-          <p className="text-sm">Details: <span className="font-bold">{paymentDetails}</span></p>
-          {isPaid && transactionId && (
-            <p className="text-sm">Transaction ID: <span className="font-bold">{transactionId}</span></p>
+            </thead>
+            <tbody>
+              {printableItems.map((it, idx) => (
+                <tr key={it.id}>
+                  <td>Item {idx + 1}</td>
+                  <td>{it.description || "-"}</td>
+                  <td className="num">{it.qty}</td>
+                  <td className="num">Rs {money(it.unitPrice)}</td>
+                  <td className="num">Rs {money(it.qty * it.unitPrice)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hiddenItemCount > 0 && (
+            <p className="invoice-truncation-note">
+              +{hiddenItemCount} more item(s) not shown in print to keep a single-page layout.
+            </p>
           )}
         </div>
+
+        <div className="invoice-totals page-break">
+          <div className="invoice-totals-inner">
+            <div><span>Subtotal</span><span>Rs {money(subtotal)}</span></div>
+            <div><span>Tax</span><span>Rs {money(taxAmount)}</span></div>
+            <div><span>Discount</span><span>- Rs {money(discount)}</span></div>
+            <div className="invoice-total-row"><span>Total</span><span>Rs {money(total)}</span></div>
+            <div><span>Amount Paid</span><span>Rs {money(amountPaid)}</span></div>
+            <div><span>Balance Due</span><span>Rs {money(balanceDue)}</span></div>
+          </div>
+        </div>
+
+        <div className="invoice-bottom page-break">
+          <div className="invoice-payment">
+            <h3>Payment Details</h3>
+            <p>Bank Name: {paymentDetails.receiver.bankDetails.bankName || paymentDetails.sender.bankDetails.bankName || "-"}</p>
+            <p>Account Name: {paymentDetails.receiver.bankDetails.accountName || paymentDetails.sender.bankDetails.accountName || "-"}</p>
+            <p>Account Number: {paymentDetails.receiver.bankDetails.accountNumber || paymentDetails.sender.bankDetails.accountNumber || "-"}</p>
+            <p>IFSC / SWIFT: {paymentDetails.receiver.bankDetails.ifscOrSwift || paymentDetails.sender.bankDetails.ifscOrSwift || "-"}</p>
+            <p>UPI ID: {paymentDetails.receiver.upiId || paymentDetails.sender.upiId || "-"}</p>
+          </div>
+          <div className="invoice-notes">
+            <h3>Notes</h3>
+            <p>
+              Thank you for working with us. Please complete payment by the due date.
+              {transactionId ? ` Transaction ID: ${transactionId}.` : ""}
+            </p>
+          </div>
+        </div>
+
+        <div className="invoice-footer">Thank you for your business</div>
       </div>
 
       {/* App Interface */}
       <div className="print:hidden mx-auto max-w-4xl px-4 py-8">
         {/* Progress Header */}
         <div className="mb-12">
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h1 className="font-display text-2xl">Create Invoice</h1>
-            <span className="text-sm font-medium text-muted-foreground">Step {step} of 5</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-[210px]">
+                <Select value={selectedTemplateId} onValueChange={onTemplateSelect}>
+                  <SelectTrigger className="rounded-xl bg-white">
+                    <SelectValue placeholder="Use Template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Use Template</SelectItem>
+                    {templates.map((template) => (
+                      <SelectItem key={template.id} value={template.id}>
+                        {template.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="secondary"
+                className="rounded-xl"
+                onClick={onSaveTemplate}
+                disabled={saveTemplateMutation.isPending}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {saveTemplateMutation.isPending ? "Saving..." : "Save Template"}
+              </Button>
+              <span className="text-sm font-medium text-muted-foreground">Step {step} of 5</span>
+            </div>
           </div>
           <Progress value={progress} className="h-2" />
           <div className="mt-6 flex justify-between">
@@ -438,15 +724,95 @@ export default function InvoiceStudio() {
                           </Button>
                         ))}
                       </div>
-                      <div className="mt-4">
-                        <label className="text-xs font-bold uppercase text-muted-foreground">Payment Details</label>
-                        <Input
-                          value={paymentDetails}
-                          onChange={e => setPaymentDetails(e.target.value)}
-                          className="rounded-xl mt-1"
-                          placeholder="UPI ID or Bank details"
-                        />
-                      </div>
+                      {paymentType === "upi" && (
+                        <div className="mt-4 grid gap-3">
+                          <div>
+                            <label className="text-xs font-bold uppercase text-muted-foreground">Sender UPI ID</label>
+                            <Input
+                              value={paymentDetails.sender.upiId}
+                              onChange={(e) => updateUpiId("sender", e.target.value)}
+                              className="rounded-xl mt-1"
+                              placeholder="sender@upi"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold uppercase text-muted-foreground">Receiver UPI ID</label>
+                            <Input
+                              value={paymentDetails.receiver.upiId}
+                              onChange={(e) => updateUpiId("receiver", e.target.value)}
+                              className="rounded-xl mt-1"
+                              placeholder="receiver@upi"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {paymentType === "bank" && (
+                        <div className="mt-4 grid gap-4">
+                          <div className="rounded-2xl border bg-white p-3">
+                            <p className="text-xs font-bold uppercase text-muted-foreground mb-2">Sender Bank Details</p>
+                            <div className="grid gap-2">
+                              <Input
+                                value={paymentDetails.sender.bankDetails.accountName}
+                                onChange={(e) => updateBankDetail("sender", "accountName", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Account name"
+                              />
+                              <Input
+                                value={paymentDetails.sender.bankDetails.accountNumber}
+                                onChange={(e) => updateBankDetail("sender", "accountNumber", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Account number"
+                              />
+                              <Input
+                                value={paymentDetails.sender.bankDetails.ifscOrSwift}
+                                onChange={(e) => updateBankDetail("sender", "ifscOrSwift", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="IFSC / SWIFT"
+                              />
+                              <Input
+                                value={paymentDetails.sender.bankDetails.bankName}
+                                onChange={(e) => updateBankDetail("sender", "bankName", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Bank name"
+                              />
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border bg-white p-3">
+                            <p className="text-xs font-bold uppercase text-muted-foreground mb-2">Receiver Bank Details</p>
+                            <div className="grid gap-2">
+                              <Input
+                                value={paymentDetails.receiver.bankDetails.accountName}
+                                onChange={(e) => updateBankDetail("receiver", "accountName", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Account name"
+                              />
+                              <Input
+                                value={paymentDetails.receiver.bankDetails.accountNumber}
+                                onChange={(e) => updateBankDetail("receiver", "accountNumber", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Account number"
+                              />
+                              <Input
+                                value={paymentDetails.receiver.bankDetails.ifscOrSwift}
+                                onChange={(e) => updateBankDetail("receiver", "ifscOrSwift", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="IFSC / SWIFT"
+                              />
+                              <Input
+                                value={paymentDetails.receiver.bankDetails.bankName}
+                                onChange={(e) => updateBankDetail("receiver", "bankName", e.target.value)}
+                                className="rounded-xl"
+                                placeholder="Bank name"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {paymentType === "cash" && (
+                        <p className="mt-4 text-xs text-muted-foreground">
+                          Cash selected. No UPI or bank details needed.
+                        </p>
+                      )}
                     </div>
                     <div className="p-5 border rounded-3xl bg-gray-50">
                       <label className="text-sm font-medium mb-3 block">Invoice Status</label>
@@ -466,6 +832,15 @@ export default function InvoiceStudio() {
                           PAID
                         </Button>
                       </div>
+                      {!isPaid && (
+                        <Button
+                          variant="outline"
+                          className="mt-3 w-full rounded-2xl border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          onClick={() => setIsPaid(true)}
+                        >
+                          Mark as Paid
+                        </Button>
+                      )}
                       {isPaid && (
                         <div className="mt-4">
                           <label className="text-xs font-bold uppercase text-rose-500">Transaction ID (Required)*</label>
@@ -480,15 +855,50 @@ export default function InvoiceStudio() {
                       <p className="text-xs text-muted-foreground mt-4">This will be printed on the final invoice document.</p>
                     </div>
                   </div>
+                  <div className="rounded-2xl border bg-gray-50 p-4">
+                    <p className="text-xs font-bold uppercase text-muted-foreground mb-2">Payment Preview</p>
+                    <p className="text-sm mb-2">
+                      Method: <span className="font-bold uppercase">{paymentType}</span>
+                    </p>
+                    {paymentType === "cash" && (
+                      <p className="text-sm">Cash payment selected.</p>
+                    )}
+                    {paymentType === "upi" && (
+                      <div className="grid gap-1">
+                        <p className="text-sm">Sender UPI ID: <span className="font-bold">{paymentDetails.sender.upiId || "-"}</span></p>
+                        <p className="text-sm">Receiver UPI ID: <span className="font-bold">{paymentDetails.receiver.upiId || "-"}</span></p>
+                      </div>
+                    )}
+                    {paymentType === "bank" && (
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="rounded-xl border bg-white p-3">
+                          <p className="text-xs font-bold uppercase text-muted-foreground mb-1">Sender Bank</p>
+                          <p className="text-sm">Account Name: <span className="font-bold">{paymentDetails.sender.bankDetails.accountName || "-"}</span></p>
+                          <p className="text-sm">Account Number: <span className="font-bold">{paymentDetails.sender.bankDetails.accountNumber || "-"}</span></p>
+                          <p className="text-sm">IFSC / SWIFT: <span className="font-bold">{paymentDetails.sender.bankDetails.ifscOrSwift || "-"}</span></p>
+                          <p className="text-sm">Bank Name: <span className="font-bold">{paymentDetails.sender.bankDetails.bankName || "-"}</span></p>
+                        </div>
+                        <div className="rounded-xl border bg-white p-3">
+                          <p className="text-xs font-bold uppercase text-muted-foreground mb-1">Receiver Bank</p>
+                          <p className="text-sm">Account Name: <span className="font-bold">{paymentDetails.receiver.bankDetails.accountName || "-"}</span></p>
+                          <p className="text-sm">Account Number: <span className="font-bold">{paymentDetails.receiver.bankDetails.accountNumber || "-"}</span></p>
+                          <p className="text-sm">IFSC / SWIFT: <span className="font-bold">{paymentDetails.receiver.bankDetails.ifscOrSwift || "-"}</span></p>
+                          <p className="text-sm">Bank Name: <span className="font-bold">{paymentDetails.receiver.bankDetails.bankName || "-"}</span></p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   <div className={cn("p-8 rounded-3xl border-2 border-dashed flex flex-col items-center justify-center text-center", theme.colors)}>
                     <CheckCircle2 className={cn("h-16 w-16 mb-4", theme.accent)} />
                     <h3 className="font-display text-2xl">Perfect!</h3>
                     <p className="text-sm text-muted-foreground mt-2">Your professional invoice for ₹{money(total)} is ready.</p>
-                    <div className="mt-8 flex gap-4 w-full">
+                    <div className="mt-8 flex flex-wrap gap-4 w-full">
                       <Button 
                         className={cn("flex-1 rounded-2xl h-14 text-lg text-white", theme.primary)} 
-                        onClick={() => window.print()}
+                        onClick={() => {
+                          window.print();
+                        }}
                         disabled={isPaid && !transactionId}
                       >
                         <Printer className="mr-2 h-5 w-5" /> Print / Save PDF
@@ -496,15 +906,82 @@ export default function InvoiceStudio() {
                       <Button 
                         variant="outline" 
                         className="flex-1 rounded-2xl h-14 text-lg border-2" 
-                        onClick={() => window.print()}
+                        onClick={() => {
+                          setHasDownloadedInvoice(true);
+                          window.print();
+                        }}
                         disabled={isPaid && !transactionId}
                       >
                         <Download className="mr-2 h-5 w-5" /> Download PDF
                       </Button>
+                      <Button
+                        variant="secondary"
+                        className="flex-1 rounded-2xl h-14 text-lg"
+                        onClick={onSaveInvoice}
+                        disabled={saveInvoiceMutation.isPending || (isPaid && !transactionId)}
+                      >
+                        <Save className="mr-2 h-5 w-5" />
+                        {saveInvoiceMutation.isPending ? "Saving..." : "Save Invoice"}
+                      </Button>
                     </div>
+                    {hasDownloadedInvoice && (
+                      <Link href="/">
+                        <Button variant="outline" className="mt-4 rounded-2xl">
+                          Return to Home
+                        </Button>
+                      </Link>
+                    )}
                     {isPaid && !transactionId && (
                       <p className="text-xs text-rose-500 mt-4 font-bold">Please enter a Transaction ID to generate the invoice.</p>
                     )}
+                  </div>
+
+                  <div className="rounded-3xl border bg-white p-6">
+                    <h3 className="font-display text-xl">Saved Invoices</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Update status later from here.
+                    </p>
+                    <div className="mt-4 grid gap-3">
+                      {invoices.length === 0 && (
+                        <p className="text-sm text-muted-foreground">No invoices saved yet.</p>
+                      )}
+                      {invoices.map((invoice) => (
+                        <div
+                          key={invoice.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4"
+                        >
+                          <div>
+                            <p className="font-medium">{invoice.client.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {format(new Date(invoice.createdAt), "dd MMM yyyy")} | ₹{money(invoice.total)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                "rounded-full px-3 py-1 text-xs font-bold uppercase",
+                                invoice.status === "paid"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-orange-100 text-orange-700",
+                              )}
+                            >
+                              {invoice.status}
+                            </span>
+                            {invoice.status === "unpaid" && (
+                              <Button
+                                size="sm"
+                                className="rounded-xl"
+                                disabled={markInvoicePaidMutation.isPending}
+                                onClick={() => markInvoicePaidMutation.mutate(invoice.id)}
+                              >
+                                <CircleDollarSign className="mr-2 h-4 w-4" />
+                                Mark as Paid
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -532,15 +1009,222 @@ export default function InvoiceStudio() {
           )}
         </div>
       </div>
-
       <style>{`
+        .invoice-container {
+          width: 210mm;
+          min-height: 297mm;
+          padding: 20mm 15mm;
+          box-sizing: border-box;
+          font-family: Inter, Roboto, Helvetica, Arial, sans-serif;
+          color: #111827;
+          background: #ffffff;
+          overflow: hidden;
+        }
+
+        .invoice-header {
+          display: grid;
+          grid-template-columns: 60% 40%;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .invoice-header-left {
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-start;
+          gap: 8px;
+        }
+
+        .invoice-logo {
+          max-height: 60px;
+          max-width: 180px;
+          width: auto;
+          object-fit: contain;
+        }
+
+        .invoice-company-name {
+          font-size: 24px;
+          line-height: 1.2;
+          margin: 0;
+          font-weight: 700;
+        }
+
+        .invoice-header-right {
+          text-align: right;
+          font-size: 11px;
+          line-height: 1.3;
+        }
+
+        .invoice-header-right p {
+          margin: 2px 0;
+        }
+
+        .invoice-header-right span {
+          font-weight: 600;
+        }
+
+        .invoice-title {
+          font-size: 24px;
+          margin: 0 0 6px;
+          text-transform: uppercase;
+          font-weight: 800;
+        }
+
+        .invoice-billing {
+          display: grid;
+          grid-template-columns: 50% 50%;
+          gap: 12px;
+          margin-bottom: 25px;
+          font-size: 11px;
+          line-height: 1.35;
+        }
+
+        .invoice-billing h3 {
+          margin: 0 0 4px;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .invoice-billing p {
+          margin: 1px 0;
+        }
+
+        .invoice-table {
+          width: 100%;
+          border-collapse: collapse;
+          table-layout: fixed;
+          margin-bottom: 8px;
+          font-size: 11px;
+        }
+
+        .invoice-table thead tr {
+          background: #f5f5f5;
+        }
+
+        .invoice-table th,
+        .invoice-table td {
+          border: 1px solid #e5e7eb;
+          padding: 6px 8px;
+          text-align: left;
+          min-height: 32px;
+          vertical-align: top;
+        }
+
+        .invoice-table .num {
+          text-align: right;
+        }
+
+        .invoice-truncation-note {
+          margin: 0 0 6px;
+          font-size: 10px;
+          color: #6b7280;
+        }
+
+        .invoice-totals {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 14px;
+        }
+
+        .invoice-totals-inner {
+          width: 40%;
+          min-width: 220px;
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .invoice-totals-inner > div {
+          display: flex;
+          justify-content: space-between;
+          margin: 2px 0;
+        }
+
+        .invoice-total-row {
+          font-size: 16px;
+          font-weight: 700;
+          border-top: 1px solid #d1d5db;
+          padding-top: 4px;
+          margin-top: 4px;
+        }
+
+        .invoice-bottom {
+          display: grid;
+          grid-template-columns: 50% 50%;
+          gap: 12px;
+          margin-top: auto;
+        }
+
+        .invoice-payment,
+        .invoice-notes {
+          font-size: 11px;
+          line-height: 1.35;
+        }
+
+        .invoice-payment h3,
+        .invoice-notes h3 {
+          margin: 0 0 4px;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .invoice-payment p {
+          margin: 1px 0;
+        }
+
+        .invoice-notes {
+          font-size: 10px;
+        }
+
+        .invoice-notes p {
+          margin: 0;
+          max-height: 70px;
+          overflow: hidden;
+        }
+
+        .invoice-footer {
+          text-align: center;
+          margin-top: 12px;
+          font-size: 10px;
+        }
+
+        .page-break {
+          page-break-inside: avoid;
+          break-inside: avoid;
+        }
+
         @media print {
-          @page { size: auto; margin: 0; }
-          body { background: white !important; margin: 0; padding: 0; }
-          .print\\:hidden { display: none !important; }
-          .print\\:block { display: block !important; }
+          @page {
+            size: A4;
+            margin-top: 20mm;
+            margin-right: 15mm;
+            margin-bottom: 20mm;
+            margin-left: 15mm;
+          }
+
+          body {
+            margin: 0;
+          }
+
+          .print\:hidden {
+            display: none !important;
+          }
+
+          .invoice-container {
+            width: 210mm;
+            min-height: 297mm;
+            padding: 20mm 15mm;
+            box-sizing: border-box;
+          }
+
+          .page-break {
+            page-break-inside: avoid;
+          }
         }
       `}</style>
     </div>
   );
 }
+
+
