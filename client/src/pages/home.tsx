@@ -7,7 +7,8 @@ import {
   Zap, 
   ArrowRight,
   CheckCircle,
-  ReceiptText
+  ReceiptText,
+  Archive
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,11 +25,18 @@ export default function Home() {
             </div>
             <span className="font-display text-2xl font-bold tracking-tight text-violet-950">Invoxa</span>
           </div>
-          <Link href="/create">
-            <Button className="rounded-full bg-violet-600 hover:bg-violet-700 text-white px-6">
-              Create Invoice
-            </Button>
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link href="/create#saved-invoices">
+              <Button variant="outline" className="rounded-full border-violet-200 text-violet-700 hover:bg-violet-100 px-6">
+                View Saved Invoices
+              </Button>
+            </Link>
+            <Link href="/create">
+              <Button className="rounded-full bg-violet-600 hover:bg-violet-700 text-white px-6">
+                Create Invoice
+              </Button>
+            </Link>
+          </div>
         </div>
       </nav>
 
@@ -58,9 +66,12 @@ export default function Home() {
                   <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
                 </Button>
               </Link>
-              <Button variant="ghost" className="h-14 px-8 rounded-2xl text-violet-600 font-bold hover:bg-violet-100">
-                View Sample
-              </Button>
+              <Link href="/create#saved-invoices">
+                <Button variant="ghost" className="h-14 px-8 rounded-2xl text-violet-600 font-bold hover:bg-violet-100">
+                  <Archive className="mr-2 h-5 w-5" />
+                  View Saved Invoices
+                </Button>
+              </Link>
             </div>
           </motion.div>
 

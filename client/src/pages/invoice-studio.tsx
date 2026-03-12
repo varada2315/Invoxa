@@ -73,6 +73,8 @@ const FONTS = [
 const THEME_BY_ID = new Map(THEMES.map((theme) => [theme.id, theme]));
 const FONT_BY_ID = new Map(FONTS.map((font) => [font.id, font]));
 const MAX_LOGO_FILE_SIZE_BYTES = 1024 * 1024;
+const MAX_LOGO_DIMENSION_PX = 1200;
+const LOGO_EXPORT_QUALITY = 0.9;
 const PRINT_SCALE_PRECISION = 3;
 const EMPTY_BANK_DETAILS = {
   accountName: "",
@@ -80,6 +82,39 @@ const EMPTY_BANK_DETAILS = {
   ifscOrSwift: "",
   bankName: "",
 };
+
+async function optimizeLogoFile(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Could not read the selected logo."));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const nextImage = new Image();
+    nextImage.onload = () => resolve(nextImage);
+    nextImage.onerror = () => reject(new Error("Could not process the selected logo."));
+    nextImage.src = dataUrl;
+  });
+
+  const longestSide = Math.max(image.width, image.height);
+  const scale = longestSide > MAX_LOGO_DIMENSION_PX ? MAX_LOGO_DIMENSION_PX / longestSide : 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas is not available for logo optimization.");
+  }
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const mimeType = file.type === "image/png" ? "image/png" : "image/jpeg";
+  return canvas.toDataURL(mimeType, LOGO_EXPORT_QUALITY);
+}
 
 export default function InvoiceStudio() {
   const [step, setStep] = useState(1);
@@ -132,6 +167,21 @@ export default function InvoiceStudio() {
   const printContainerRef = useRef<HTMLDivElement | null>(null);
   const printPageRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (window.location.hash !== "#saved-invoices") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      document.getElementById("saved-invoices")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 150);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   const { data: templates = [] } = useQuery<InvoiceTemplate[]>({
     queryKey: ["/api/invoice-templates"],
@@ -336,7 +386,7 @@ export default function InvoiceStudio() {
     { title: "Finalize", icon: CreditCard },
   ];
 
-  const onLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > MAX_LOGO_FILE_SIZE_BYTES) {
@@ -348,11 +398,22 @@ export default function InvoiceStudio() {
         return;
       }
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSender({ ...sender, logoDataUrl: reader.result as string });
-      };
-      reader.readAsDataURL(file);
+      try {
+        const optimizedLogoDataUrl = await optimizeLogoFile(file);
+        setSender((current) => ({ ...current, logoDataUrl: optimizedLogoDataUrl }));
+        toast({
+          title: "Logo added",
+          description: "Your logo was optimized and is ready to save in templates and invoices.",
+        });
+      } catch (error) {
+        toast({
+          title: "Could not add logo",
+          description: error instanceof Error ? error.message : "Unexpected error",
+          variant: "destructive",
+        });
+      } finally {
+        e.target.value = "";
+      }
     }
   };
 
@@ -1056,7 +1117,7 @@ export default function InvoiceStudio() {
                     )}
                   </div>
 
-                  <div className="rounded-3xl border bg-white p-6">
+                  <div id="saved-invoices" className="rounded-3xl border bg-white p-6 scroll-mt-24">
                     <h3 className="font-display text-xl">Saved Invoices</h3>
                     <p className="text-sm text-muted-foreground mt-1">
                       Load any saved invoice back into the editor to update and print it.
