@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import {
   Plus,
   Trash2,
@@ -36,6 +36,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import type {
   Invoice,
@@ -148,6 +149,8 @@ async function optimizeLogoFile(file: File): Promise<string> {
 }
 
 export default function InvoiceStudio() {
+  const [, setLocation] = useLocation();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [step, setStep] = useState(1);
   const [theme, setTheme] = useState(THEMES[0]);
   const [font, setFont] = useState(FONTS[0]);
@@ -200,6 +203,16 @@ export default function InvoiceStudio() {
   const { toast } = useToast();
 
   useEffect(() => {
+    if (!isAuthLoading && !user) {
+      setLocation("/login");
+    }
+  }, [isAuthLoading, setLocation, user]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
     if (window.location.hash !== "#saved-invoices") {
       return;
     }
@@ -214,14 +227,20 @@ export default function InvoiceStudio() {
     }, 150);
 
     return () => window.clearTimeout(timeoutId);
-  }, []);
+  }, [user]);
 
   const { data: templates = [] } = useQuery<InvoiceTemplate[]>({
     queryKey: ["/api/invoice-templates"],
+    enabled: !!user,
   });
   const { data: invoices = [] } = useQuery<Invoice[]>({
     queryKey: ["/api/invoices"],
+    enabled: !!user,
   });
+
+  if (isAuthLoading || !user) {
+    return <div className="min-h-screen grid place-items-center">Loading...</div>;
+  }
 
   const saveTemplateMutation = useMutation({
     mutationFn: async (name: string) => {

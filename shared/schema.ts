@@ -1,17 +1,26 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export const signupSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email("Valid email is required").transform((value) => value.trim().toLowerCase()),
+  password: z.string().min(4, "Password must be at least 4 characters"),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const loginSchema = z.object({
+  email: z.string().email("Valid email is required").transform((value) => value.trim().toLowerCase()),
+  password: z.string().min(1, "Password is required"),
+});
+
+export const userSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string().email(),
+  passwordHash: z.string(),
+  createdAt: z.string(),
+});
+
+export const publicUserSchema = userSchema.omit({
+  passwordHash: true,
 });
 
 const bankDetailsSchema = z.object({
@@ -91,6 +100,7 @@ export const insertInvoiceTemplateSchema = z.object({
 
 export const invoiceTemplateSchema = insertInvoiceTemplateSchema.extend({
   id: z.string(),
+  userId: z.string(),
   createdAt: z.string(),
 });
 
@@ -98,6 +108,7 @@ export const invoiceStatusSchema = z.enum(["paid", "unpaid"]);
 
 export const invoiceSchema = z.object({
   id: z.string(),
+  userId: z.string(),
   createdAt: z.string(),
   status: invoiceStatusSchema,
   sender: z.object({
@@ -133,6 +144,7 @@ export const invoiceSchema = z.object({
 
 export const insertInvoiceSchema = invoiceSchema.omit({
   id: true,
+  userId: true,
   createdAt: true,
 });
 
@@ -142,8 +154,10 @@ export const updateInvoiceStatusSchema = z.object({
 
 export const updateInvoiceSchema = insertInvoiceSchema;
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export type SignupInput = z.infer<typeof signupSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+export type User = z.infer<typeof userSchema>;
+export type PublicUser = z.infer<typeof publicUserSchema>;
 export type InvoiceTemplateData = z.infer<typeof invoiceTemplateDataSchema>;
 export type InsertInvoiceTemplate = z.infer<typeof insertInvoiceTemplateSchema>;
 export type InvoiceTemplate = z.infer<typeof invoiceTemplateSchema>;

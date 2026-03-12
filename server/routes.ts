@@ -1,32 +1,99 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import { type Server } from "http";
 import {
   insertInvoiceSchema,
   insertInvoiceTemplateSchema,
+  loginSchema,
+  signupSchema,
   updateInvoiceSchema,
   updateInvoiceStatusSchema,
 } from "@shared/schema";
+import { requireAuth, toPublicUser, verifyPassword } from "./auth";
 import { storage } from "./storage";
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
-
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
-  app.get("/api/invoice-templates", async (_req, res, next) => {
+  app.get("/api/auth/me", async (req, res, next) => {
     try {
-      const templates = await storage.listInvoiceTemplates();
+      if (!req.session.userId) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      const user = await storage.getUser(req.session.userId);
+      if (!user) {
+        req.session.destroy(() => undefined);
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      return res.json(toPublicUser(user));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/auth/signup", async (req, res, next) => {
+    try {
+      const parsed = signupSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid signup payload",
+          errors: parsed.error.flatten(),
+        });
+      }
+
+      const user = await storage.createUser(parsed.data);
+      req.session.userId = user.id;
+      return res.status(201).json(toPublicUser(user));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res, next) => {
+    try {
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid login payload",
+          errors: parsed.error.flatten(),
+        });
+      }
+
+      const user = await storage.getUserByEmail(parsed.data.email);
+      if (!user || !verifyPassword(parsed.data.password, user.passwordHash)) {
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      req.session.userId = user.id;
+      return res.json(toPublicUser(user));
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res, next) => {
+    req.session.destroy((error) => {
+      if (error) {
+        return next(error);
+      }
+
+      res.clearCookie("connect.sid");
+      return res.status(204).end();
+    });
+  });
+
+  app.get("/api/invoice-templates", requireAuth, async (req, res, next) => {
+    try {
+      const templates = await storage.listInvoiceTemplates(req.session.userId!);
       res.json(templates);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/invoice-templates", async (req, res, next) => {
+  app.post("/api/invoice-templates", requireAuth, async (req, res, next) => {
     try {
       const parsed = insertInvoiceTemplateSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -36,23 +103,23 @@ export async function registerRoutes(
         });
       }
 
-      const template = await storage.createInvoiceTemplate(parsed.data);
+      const template = await storage.createInvoiceTemplate(req.session.userId!, parsed.data);
       return res.status(201).json(template);
     } catch (error) {
       return next(error);
     }
   });
 
-  app.get("/api/invoices", async (_req, res, next) => {
+  app.get("/api/invoices", requireAuth, async (req, res, next) => {
     try {
-      const invoices = await storage.listInvoices();
+      const invoices = await storage.listInvoices(req.session.userId!);
       res.json(invoices);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/invoices", async (req, res, next) => {
+  app.post("/api/invoices", requireAuth, async (req, res, next) => {
     try {
       const parsed = insertInvoiceSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -62,14 +129,14 @@ export async function registerRoutes(
         });
       }
 
-      const invoice = await storage.createInvoice(parsed.data);
+      const invoice = await storage.createInvoice(req.session.userId!, parsed.data);
       return res.status(201).json(invoice);
     } catch (error) {
       return next(error);
     }
   });
 
-  app.patch("/api/invoices/:id/status", async (req, res, next) => {
+  app.patch("/api/invoices/:id/status", requireAuth, async (req, res, next) => {
     try {
       const parsed = updateInvoiceStatusSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -80,6 +147,7 @@ export async function registerRoutes(
       }
 
       const updatedInvoice = await storage.updateInvoiceStatus(
+        req.session.userId!,
         req.params.id,
         parsed.data.status,
       );
@@ -93,7 +161,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/invoices/:id", async (req, res, next) => {
+  app.put("/api/invoices/:id", requireAuth, async (req, res, next) => {
     try {
       const parsed = updateInvoiceSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -103,7 +171,11 @@ export async function registerRoutes(
         });
       }
 
-      const updatedInvoice = await storage.updateInvoice(req.params.id, parsed.data);
+      const updatedInvoice = await storage.updateInvoice(
+        req.session.userId!,
+        req.params.id,
+        parsed.data,
+      );
       if (!updatedInvoice) {
         return res.status(404).json({ message: "Invoice not found" });
       }
