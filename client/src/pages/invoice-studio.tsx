@@ -74,7 +74,10 @@ const THEME_BY_ID = new Map(THEMES.map((theme) => [theme.id, theme]));
 const FONT_BY_ID = new Map(FONTS.map((font) => [font.id, font]));
 const MAX_LOGO_FILE_SIZE_BYTES = 1024 * 1024;
 const MAX_LOGO_DIMENSION_PX = 1200;
-const LOGO_EXPORT_QUALITY = 0.9;
+const MIN_LOGO_DIMENSION_PX = 320;
+const INITIAL_LOGO_EXPORT_QUALITY = 0.9;
+const MIN_LOGO_EXPORT_QUALITY = 0.45;
+const MAX_LOGO_DATA_URL_LENGTH = 450 * 1024;
 const PRINT_SCALE_PRECISION = 3;
 const EMPTY_BANK_DETAILS = {
   accountName: "",
@@ -98,22 +101,50 @@ async function optimizeLogoFile(file: File): Promise<string> {
     nextImage.src = dataUrl;
   });
 
-  const longestSide = Math.max(image.width, image.height);
-  const scale = longestSide > MAX_LOGO_DIMENSION_PX ? MAX_LOGO_DIMENSION_PX / longestSide : 1;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(image.width * scale));
-  canvas.height = Math.max(1, Math.round(image.height * scale));
-
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("Canvas is not available for logo optimization.");
   }
 
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  let targetLongestSide = Math.min(
+    MAX_LOGO_DIMENSION_PX,
+    Math.max(image.width, image.height),
+  );
+  let quality = INITIAL_LOGO_EXPORT_QUALITY;
+  let bestDataUrl = dataUrl;
 
-  const mimeType = file.type === "image/png" ? "image/png" : "image/jpeg";
-  return canvas.toDataURL(mimeType, LOGO_EXPORT_QUALITY);
+  while (targetLongestSide >= MIN_LOGO_DIMENSION_PX) {
+    const scale = targetLongestSide / Math.max(image.width, image.height);
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    let nextQuality = quality;
+    while (nextQuality >= MIN_LOGO_EXPORT_QUALITY) {
+      const candidate = canvas.toDataURL("image/webp", nextQuality);
+      if (candidate.length < bestDataUrl.length) {
+        bestDataUrl = candidate;
+      }
+
+      if (candidate.length <= MAX_LOGO_DATA_URL_LENGTH) {
+        return candidate;
+      }
+
+      nextQuality = Number((nextQuality - 0.1).toFixed(2));
+    }
+
+    targetLongestSide = Math.floor(targetLongestSide * 0.8);
+    quality = INITIAL_LOGO_EXPORT_QUALITY;
+  }
+
+  if (bestDataUrl.length <= MAX_LOGO_DATA_URL_LENGTH) {
+    return bestDataUrl;
+  }
+
+  throw new Error("Logo is still too large after optimization. Please use a smaller image.");
 }
 
 export default function InvoiceStudio() {
@@ -172,6 +203,8 @@ export default function InvoiceStudio() {
     if (window.location.hash !== "#saved-invoices") {
       return;
     }
+
+    setStep(5);
 
     const timeoutId = window.setTimeout(() => {
       document.getElementById("saved-invoices")?.scrollIntoView({
