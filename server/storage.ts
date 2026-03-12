@@ -6,6 +6,7 @@ import {
   type InsertInvoice,
   type Invoice,
   type InvoiceStatus,
+  type UpdateInvoice,
   invoiceTemplateSchema,
   invoiceSchema,
 } from "@shared/schema";
@@ -24,6 +25,7 @@ export interface IStorage {
   createInvoiceTemplate(template: InsertInvoiceTemplate): Promise<InvoiceTemplate>;
   listInvoices(): Promise<Invoice[]>;
   createInvoice(invoice: InsertInvoice): Promise<Invoice>;
+  updateInvoice(id: string, invoice: UpdateInvoice): Promise<Invoice | undefined>;
   updateInvoiceStatus(id: string, status: InvoiceStatus): Promise<Invoice | undefined>;
 }
 
@@ -194,6 +196,28 @@ export class MemStorage implements IStorage {
     await this.persistInvoices();
 
     return invoice;
+  }
+
+  async updateInvoice(
+    id: string,
+    updateInvoice: UpdateInvoice,
+  ): Promise<Invoice | undefined> {
+    await this.ensureInvoicesLoaded();
+
+    const existing = this.invoices.get(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const updated: Invoice = {
+      ...existing,
+      ...updateInvoice,
+    };
+
+    this.invoices.set(id, updated);
+    await this.persistInvoices();
+
+    return updated;
   }
 
   async updateInvoiceStatus(

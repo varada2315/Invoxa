@@ -140,6 +140,8 @@ export const updateInvoiceStatusSchema = z.object({
   status: invoiceStatusSchema,
 });
 
+export const updateInvoiceSchema = insertInvoiceSchema;
+
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type InvoiceTemplateData = z.infer<typeof invoiceTemplateDataSchema>;
@@ -148,3 +150,4 @@ export type InvoiceTemplate = z.infer<typeof invoiceTemplateSchema>;
 export type InvoiceStatus = z.infer<typeof invoiceStatusSchema>;
 export type Invoice = z.infer<typeof invoiceSchema>;
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+export type UpdateInvoice = z.infer<typeof updateInvoiceSchema>;

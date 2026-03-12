@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import {
   insertInvoiceSchema,
   insertInvoiceTemplateSchema,
+  updateInvoiceSchema,
   updateInvoiceStatusSchema,
 } from "@shared/schema";
 import { storage } from "./storage";
@@ -82,6 +83,27 @@ export async function registerRoutes(
         req.params.id,
         parsed.data.status,
       );
+      if (!updatedInvoice) {
+        return res.status(404).json({ message: "Invoice not found" });
+      }
+
+      return res.json(updatedInvoice);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.put("/api/invoices/:id", async (req, res, next) => {
+    try {
+      const parsed = updateInvoiceSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid invoice payload",
+          errors: parsed.error.flatten(),
+        });
+      }
+
+      const updatedInvoice = await storage.updateInvoice(req.params.id, parsed.data);
       if (!updatedInvoice) {
         return res.status(404).json({ message: "Invoice not found" });
       }

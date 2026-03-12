@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Save,
+  Pencil,
   Palette,
   Briefcase,
   Users,
@@ -71,6 +72,8 @@ const FONTS = [
 
 const THEME_BY_ID = new Map(THEMES.map((theme) => [theme.id, theme]));
 const FONT_BY_ID = new Map(FONTS.map((font) => [font.id, font]));
+const MAX_LOGO_FILE_SIZE_BYTES = 1024 * 1024;
+const PRINT_SCALE_PRECISION = 3;
 const EMPTY_BANK_DETAILS = {
   accountName: "",
   accountNumber: "",
@@ -124,6 +127,10 @@ export default function InvoiceStudio() {
   const [isPaid, setIsPaid] = useState<boolean>(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState("none");
   const [hasDownloadedInvoice, setHasDownloadedInvoice] = useState(false);
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
+  const [printScale, setPrintScale] = useState(1);
+  const printContainerRef = useRef<HTMLDivElement | null>(null);
+  const printPageRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
 
   const { data: templates = [] } = useQuery<InvoiceTemplate[]>({
@@ -195,14 +202,19 @@ export default function InvoiceStudio() {
         fontId: font.id,
       };
 
-      const res = await apiRequest("POST", "/api/invoices", payload);
+      const res = editingInvoiceId
+        ? await apiRequest("PUT", `/api/invoices/${editingInvoiceId}`, payload)
+        : await apiRequest("POST", "/api/invoices", payload);
       return (await res.json()) as Invoice;
     },
-    onSuccess: () => {
+    onSuccess: (savedInvoice) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      setEditingInvoiceId(savedInvoice.id);
       toast({
-        title: "Invoice saved",
-        description: "Invoice status and details were stored successfully.",
+        title: editingInvoiceId ? "Invoice updated" : "Invoice saved",
+        description: editingInvoiceId
+          ? "Saved invoice changes are ready to print."
+          : "Invoice status and details were stored successfully.",
       });
     },
     onError: (error) => {
@@ -221,11 +233,12 @@ export default function InvoiceStudio() {
       });
       return (await res.json()) as Invoice;
     },
-    onSuccess: () => {
+    onSuccess: (updatedInvoice) => {
       queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      loadInvoiceForEditing(updatedInvoice, false);
       toast({
         title: "Invoice updated",
-        description: "Invoice status changed to paid.",
+        description: "Invoice status changed to paid. Review and print the paid invoice.",
       });
     },
     onError: (error) => {
@@ -244,8 +257,6 @@ export default function InvoiceStudio() {
   const total = discountedSubtotal + taxAmount;
   const amountPaid = isPaid ? total : 0;
   const balanceDue = Math.max(0, total - amountPaid);
-  const printableItems = items.slice(0, 10);
-  const hiddenItemCount = Math.max(0, items.length - printableItems.length);
   const invoiceNumber = useMemo(
     () => `INV-${format(new Date(), "yyyyMMdd")}-${String(items.length).padStart(2, "0")}`,
     [items.length],
@@ -257,6 +268,62 @@ export default function InvoiceStudio() {
   }, []);
 
   const progress = (step / 5) * 100;
+
+  useEffect(() => {
+    const measurePrintScale = () => {
+      const container = printContainerRef.current;
+      const page = printPageRef.current;
+      if (!container || !page) {
+        return;
+      }
+
+      const computedStyle = window.getComputedStyle(container);
+      const availableWidth =
+        container.clientWidth -
+        parseFloat(computedStyle.paddingLeft) -
+        parseFloat(computedStyle.paddingRight);
+      const availableHeight =
+        container.clientHeight -
+        parseFloat(computedStyle.paddingTop) -
+        parseFloat(computedStyle.paddingBottom);
+
+      const naturalWidth = page.scrollWidth;
+      const naturalHeight = page.scrollHeight;
+
+      if (availableWidth <= 0 || availableHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
+        return;
+      }
+
+      const nextScale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
+      const roundedScale = Number(nextScale.toFixed(PRINT_SCALE_PRECISION));
+
+      setPrintScale((currentScale) =>
+        Math.abs(currentScale - roundedScale) < 0.001 ? currentScale : roundedScale,
+      );
+    };
+
+    const frameId = window.requestAnimationFrame(measurePrintScale);
+    window.addEventListener("resize", measurePrintScale);
+    window.addEventListener("beforeprint", measurePrintScale);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", measurePrintScale);
+      window.removeEventListener("beforeprint", measurePrintScale);
+    };
+  }, [
+    sender,
+    client,
+    items,
+    taxMode,
+    taxRate,
+    discount,
+    paymentType,
+    paymentDetails,
+    transactionId,
+    isPaid,
+    total,
+  ]);
 
   const nextStep = () => setStep(s => Math.min(s + 1, 5));
   const prevStep = () => setStep(s => Math.max(s - 1, 1));
@@ -272,6 +339,15 @@ export default function InvoiceStudio() {
   const onLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > MAX_LOGO_FILE_SIZE_BYTES) {
+        toast({
+          title: "Logo too large",
+          description: "Please upload a logo image up to 1 MB.",
+        });
+        e.target.value = "";
+        return;
+      }
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setSender({ ...sender, logoDataUrl: reader.result as string });
@@ -366,10 +442,52 @@ export default function InvoiceStudio() {
     saveInvoiceMutation.mutate();
   };
 
+  const loadInvoiceForEditing = (invoice: Invoice, showToast = true) => {
+    setEditingInvoiceId(invoice.id);
+    setSender(invoice.sender);
+    setClient(invoice.client);
+    setItems(
+      invoice.items.map((item) => ({
+        ...item,
+        id: uid(),
+      })),
+    );
+    setTaxMode(invoice.taxMode);
+    setTaxRate(invoice.taxRate);
+    setDiscount(invoice.discount);
+    setPaymentType(invoice.paymentType);
+    setPaymentDetails(invoice.paymentDetails);
+    setTransactionId(invoice.transactionId);
+    setIsPaid(invoice.status === "paid");
+    setTheme(THEME_BY_ID.get(invoice.themeId) ?? THEMES[0]);
+    setFont(FONT_BY_ID.get(invoice.fontId) ?? FONTS[0]);
+    setHasDownloadedInvoice(false);
+    setStep(5);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (showToast) {
+      toast({
+        title: "Invoice loaded",
+        description: "You can now edit, save, and print this invoice.",
+      });
+    }
+  };
+
   return (
     <div className={cn("min-h-screen transition-colors duration-500 pb-20", theme.bg, font.family)}>
       {/* Print-only View */}
-      <div className="invoice-container hidden print:block bg-white text-black">
+      <div
+        ref={printContainerRef}
+        className="invoice-container bg-white text-black"
+      >
+        <div
+          ref={printPageRef}
+          className="invoice-page"
+          style={
+            {
+              "--invoice-print-scale": String(printScale),
+            } as React.CSSProperties
+          }
+        >
         <div className="invoice-header page-break">
           <div className="invoice-header-left">
             {sender.logoDataUrl && (
@@ -418,7 +536,7 @@ export default function InvoiceStudio() {
               </tr>
             </thead>
             <tbody>
-              {printableItems.map((it, idx) => (
+              {items.map((it, idx) => (
                 <tr key={it.id}>
                   <td>Item {idx + 1}</td>
                   <td>{it.description || "-"}</td>
@@ -429,11 +547,6 @@ export default function InvoiceStudio() {
               ))}
             </tbody>
           </table>
-          {hiddenItemCount > 0 && (
-            <p className="invoice-truncation-note">
-              +{hiddenItemCount} more item(s) not shown in print to keep a single-page layout.
-            </p>
-          )}
         </div>
 
         <div className="invoice-totals page-break">
@@ -466,6 +579,7 @@ export default function InvoiceStudio() {
         </div>
 
         <div className="invoice-footer">Thank you for your business</div>
+        </div>
       </div>
 
       {/* App Interface */}
@@ -921,7 +1035,13 @@ export default function InvoiceStudio() {
                         disabled={saveInvoiceMutation.isPending || (isPaid && !transactionId)}
                       >
                         <Save className="mr-2 h-5 w-5" />
-                        {saveInvoiceMutation.isPending ? "Saving..." : "Save Invoice"}
+                        {saveInvoiceMutation.isPending
+                          ? editingInvoiceId
+                            ? "Updating..."
+                            : "Saving..."
+                          : editingInvoiceId
+                            ? "Update Invoice"
+                            : "Save Invoice"}
                       </Button>
                     </div>
                     {hasDownloadedInvoice && (
@@ -939,7 +1059,7 @@ export default function InvoiceStudio() {
                   <div className="rounded-3xl border bg-white p-6">
                     <h3 className="font-display text-xl">Saved Invoices</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Update status later from here.
+                      Load any saved invoice back into the editor to update and print it.
                     </p>
                     <div className="mt-4 grid gap-3">
                       {invoices.length === 0 && (
@@ -957,6 +1077,15 @@ export default function InvoiceStudio() {
                             </p>
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-xl"
+                              onClick={() => loadInvoiceForEditing(invoice)}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Edit
+                            </Button>
                             <span
                               className={cn(
                                 "rounded-full px-3 py-1 text-xs font-bold uppercase",
@@ -1019,11 +1148,23 @@ export default function InvoiceStudio() {
           color: #111827;
           background: #ffffff;
           overflow: hidden;
+          position: absolute;
+          top: 0;
+          left: -9999px;
+          visibility: hidden;
+          pointer-events: none;
+        }
+
+        .invoice-page {
+          width: calc(100% / var(--invoice-print-scale, 1));
+          transform: scale(var(--invoice-print-scale, 1));
+          transform-origin: top left;
         }
 
         .invoice-header {
           display: grid;
           grid-template-columns: 60% 40%;
+          align-items: start;
           gap: 12px;
           margin-bottom: 16px;
         }
@@ -1031,11 +1172,13 @@ export default function InvoiceStudio() {
         .invoice-header-left {
           display: flex;
           flex-direction: column;
+          align-items: flex-start;
           justify-content: flex-start;
           gap: 8px;
         }
 
         .invoice-logo {
+          display: block;
           max-height: 60px;
           max-width: 180px;
           width: auto;
@@ -1212,6 +1355,10 @@ export default function InvoiceStudio() {
           }
 
           .invoice-container {
+            position: static;
+            left: auto;
+            visibility: visible;
+            pointer-events: auto;
             width: 210mm;
             min-height: 297mm;
             padding: 20mm 15mm;
