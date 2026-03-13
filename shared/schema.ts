@@ -123,6 +123,7 @@ export const invoiceSchema = z.object({
     name: z.string(),
     email: z.string(),
     address: z.string(),
+    contact: z.string().default(""),
   }),
   items: z.array(
     z.object({

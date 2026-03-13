@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -48,7 +48,7 @@ import type {
 
 type TaxMode = "none" | "gst" | "vat";
 type LineItem = { id: string; description: string; qty: number; unitPrice: number };
-type Client = { id: string; name: string; email: string; address: string };
+type Client = { id: string; name: string; email: string; address: string; contact: string };
 type PaymentDetails = InsertInvoice["paymentDetails"];
 
 function money(n: number) {
@@ -79,7 +79,6 @@ const MIN_LOGO_DIMENSION_PX = 320;
 const INITIAL_LOGO_EXPORT_QUALITY = 0.9;
 const MIN_LOGO_EXPORT_QUALITY = 0.45;
 const MAX_LOGO_DATA_URL_LENGTH = 450 * 1024;
-const PRINT_SCALE_PRECISION = 3;
 const EMPTY_BANK_DETAILS = {
   accountName: "",
   accountNumber: "",
@@ -170,6 +169,7 @@ export default function InvoiceStudio() {
     name: "Maple & Co.",
     email: "billing@mapleco.com",
     address: "22 Pine Street, Somewhere",
+    contact: "+91 90000 00000",
   });
 
   // Items
@@ -197,9 +197,6 @@ export default function InvoiceStudio() {
   const [selectedTemplateId, setSelectedTemplateId] = useState("none");
   const [hasDownloadedInvoice, setHasDownloadedInvoice] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
-  const [printScale, setPrintScale] = useState(1);
-  const printContainerRef = useRef<HTMLDivElement | null>(null);
-  const printPageRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -237,10 +234,6 @@ export default function InvoiceStudio() {
     queryKey: ["/api/invoices"],
     enabled: !!user,
   });
-
-  if (isAuthLoading || !user) {
-    return <div className="min-h-screen grid place-items-center">Loading...</div>;
-  }
 
   const saveTemplateMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -369,63 +362,11 @@ export default function InvoiceStudio() {
     return date;
   }, []);
 
+  if (isAuthLoading || !user) {
+    return <div className="min-h-screen grid place-items-center">Loading...</div>;
+  }
+
   const progress = (step / 5) * 100;
-
-  useEffect(() => {
-    const measurePrintScale = () => {
-      const container = printContainerRef.current;
-      const page = printPageRef.current;
-      if (!container || !page) {
-        return;
-      }
-
-      const computedStyle = window.getComputedStyle(container);
-      const availableWidth =
-        container.clientWidth -
-        parseFloat(computedStyle.paddingLeft) -
-        parseFloat(computedStyle.paddingRight);
-      const availableHeight =
-        container.clientHeight -
-        parseFloat(computedStyle.paddingTop) -
-        parseFloat(computedStyle.paddingBottom);
-
-      const naturalWidth = page.scrollWidth;
-      const naturalHeight = page.scrollHeight;
-
-      if (availableWidth <= 0 || availableHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
-        return;
-      }
-
-      const nextScale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
-      const roundedScale = Number(nextScale.toFixed(PRINT_SCALE_PRECISION));
-
-      setPrintScale((currentScale) =>
-        Math.abs(currentScale - roundedScale) < 0.001 ? currentScale : roundedScale,
-      );
-    };
-
-    const frameId = window.requestAnimationFrame(measurePrintScale);
-    window.addEventListener("resize", measurePrintScale);
-    window.addEventListener("beforeprint", measurePrintScale);
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      window.removeEventListener("resize", measurePrintScale);
-      window.removeEventListener("beforeprint", measurePrintScale);
-    };
-  }, [
-    sender,
-    client,
-    items,
-    taxMode,
-    taxRate,
-    discount,
-    paymentType,
-    paymentDetails,
-    transactionId,
-    isPaid,
-    total,
-  ]);
 
   const nextStep = () => setStep(s => Math.min(s + 1, 5));
   const prevStep = () => setStep(s => Math.max(s - 1, 1));
@@ -588,19 +529,8 @@ export default function InvoiceStudio() {
   return (
     <div className={cn("min-h-screen transition-colors duration-500 pb-20", theme.bg, font.family)}>
       {/* Print-only View */}
-      <div
-        ref={printContainerRef}
-        className="invoice-container bg-white text-black"
-      >
-        <div
-          ref={printPageRef}
-          className="invoice-page"
-          style={
-            {
-              "--invoice-print-scale": String(printScale),
-            } as React.CSSProperties
-          }
-        >
+      <div className="invoice-container bg-white text-black">
+        <div className="invoice-page">
         <div className="invoice-header page-break">
           <div className="invoice-header-left">
             {sender.logoDataUrl && (
@@ -633,7 +563,7 @@ export default function InvoiceStudio() {
             <p>{client.name}</p>
             <p>{client.address}</p>
             <p>{client.email}</p>
-            <p>{"phone" in client ? (client as { phone?: string }).phone || "-" : "-"}</p>
+            <p>{client.contact || "-"}</p>
           </div>
         </div>
 
@@ -673,20 +603,47 @@ export default function InvoiceStudio() {
           </div>
         </div>
 
-        <div className="invoice-bottom page-break">
+        <div className="invoice-bottom">
           <div className="invoice-payment">
             <h3>Payment Details</h3>
-            <p>Bank Name: {paymentDetails.receiver.bankDetails.bankName || paymentDetails.sender.bankDetails.bankName || "-"}</p>
-            <p>Account Name: {paymentDetails.receiver.bankDetails.accountName || paymentDetails.sender.bankDetails.accountName || "-"}</p>
-            <p>Account Number: {paymentDetails.receiver.bankDetails.accountNumber || paymentDetails.sender.bankDetails.accountNumber || "-"}</p>
-            <p>IFSC / SWIFT: {paymentDetails.receiver.bankDetails.ifscOrSwift || paymentDetails.sender.bankDetails.ifscOrSwift || "-"}</p>
-            <p>UPI ID: {paymentDetails.receiver.upiId || paymentDetails.sender.upiId || "-"}</p>
+            {paymentType === "bank" ? (
+              <>
+                <p><strong>Sender Bank Details</strong></p>
+                <p>Bank Name: {paymentDetails.sender.bankDetails.bankName || "-"}</p>
+                <p>Account Name: {paymentDetails.sender.bankDetails.accountName || "-"}</p>
+                <p>Account Number: {paymentDetails.sender.bankDetails.accountNumber || "-"}</p>
+                <p>IFSC / SWIFT: {paymentDetails.sender.bankDetails.ifscOrSwift || "-"}</p>
+                <p className="invoice-payment-section-gap"><strong>Receiver Bank Details</strong></p>
+                <p>Bank Name: {paymentDetails.receiver.bankDetails.bankName || "-"}</p>
+                <p>Account Name: {paymentDetails.receiver.bankDetails.accountName || "-"}</p>
+                <p>Account Number: {paymentDetails.receiver.bankDetails.accountNumber || "-"}</p>
+                <p>IFSC / SWIFT: {paymentDetails.receiver.bankDetails.ifscOrSwift || "-"}</p>
+                {isPaid && transactionId && (
+                  <p className="invoice-payment-section-gap"><strong>Transaction ID:</strong> {transactionId}</p>
+                )}
+              </>
+            ) : paymentType === "upi" ? (
+              <>
+                <p>Sender UPI ID: {paymentDetails.sender.upiId || "-"}</p>
+                <p>Receiver UPI ID: {paymentDetails.receiver.upiId || "-"}</p>
+                {isPaid && transactionId && (
+                  <p className="invoice-payment-section-gap"><strong>Transaction ID:</strong> {transactionId}</p>
+                )}
+              </>
+            ) : (
+              <>
+                <p>Cash payment</p>
+                {isPaid && transactionId && (
+                  <p className="invoice-payment-section-gap"><strong>Transaction ID:</strong> {transactionId}</p>
+                )}
+              </>
+            )}
           </div>
           <div className="invoice-notes">
             <h3>Notes</h3>
             <p>
               Thank you for working with us. Please complete payment by the due date.
-              {transactionId ? ` Transaction ID: ${transactionId}.` : ""}
+              {paymentType !== "bank" && transactionId ? ` Transaction ID: ${transactionId}.` : ""}
             </p>
           </div>
         </div>
@@ -802,6 +759,10 @@ export default function InvoiceStudio() {
                   <div>
                     <label className="text-sm font-medium">Email</label>
                     <Input value={client.email} onChange={e => setClient({...client, email: e.target.value})} className="rounded-2xl mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Contact</label>
+                    <Input value={client.contact} onChange={e => setClient({...client, contact: e.target.value})} className="rounded-2xl mt-1" />
                   </div>
                   <div>
                     <label className="text-sm font-medium">Address</label>
@@ -1253,9 +1214,14 @@ export default function InvoiceStudio() {
       </div>
       <style>{`
         .invoice-container {
-          width: 210mm;
-          min-height: 297mm;
-          padding: 20mm 15mm;
+          --invoice-page-width: 210mm;
+          --invoice-page-height: 287mm;
+          --invoice-padding-y: 10mm;
+          --invoice-padding-x: 12mm;
+          width: var(--invoice-page-width);
+          min-height: var(--invoice-page-height);
+          max-height: var(--invoice-page-height);
+          padding: var(--invoice-padding-y) var(--invoice-padding-x);
           box-sizing: border-box;
           font-family: Inter, Roboto, Helvetica, Arial, sans-serif;
           color: #111827;
@@ -1269,17 +1235,15 @@ export default function InvoiceStudio() {
         }
 
         .invoice-page {
-          width: calc(100% / var(--invoice-print-scale, 1));
-          transform: scale(var(--invoice-print-scale, 1));
-          transform-origin: top left;
+          width: 100%;
         }
 
         .invoice-header {
           display: grid;
           grid-template-columns: 60% 40%;
           align-items: start;
-          gap: 12px;
-          margin-bottom: 16px;
+          gap: 10px;
+          margin-bottom: 10px;
         }
 
         .invoice-header-left {
@@ -1292,14 +1256,14 @@ export default function InvoiceStudio() {
 
         .invoice-logo {
           display: block;
-          max-height: 60px;
+          max-height: 48px;
           max-width: 180px;
           width: auto;
           object-fit: contain;
         }
 
         .invoice-company-name {
-          font-size: 24px;
+          font-size: 20px;
           line-height: 1.2;
           margin: 0;
           font-weight: 700;
@@ -1307,12 +1271,12 @@ export default function InvoiceStudio() {
 
         .invoice-header-right {
           text-align: right;
-          font-size: 11px;
-          line-height: 1.3;
+          font-size: 10px;
+          line-height: 1.2;
         }
 
         .invoice-header-right p {
-          margin: 2px 0;
+          margin: 1px 0;
         }
 
         .invoice-header-right span {
@@ -1320,8 +1284,8 @@ export default function InvoiceStudio() {
         }
 
         .invoice-title {
-          font-size: 24px;
-          margin: 0 0 6px;
+          font-size: 20px;
+          margin: 0 0 4px;
           text-transform: uppercase;
           font-weight: 800;
         }
@@ -1329,15 +1293,15 @@ export default function InvoiceStudio() {
         .invoice-billing {
           display: grid;
           grid-template-columns: 50% 50%;
-          gap: 12px;
-          margin-bottom: 25px;
-          font-size: 11px;
-          line-height: 1.35;
+          gap: 10px;
+          margin-bottom: 14px;
+          font-size: 10px;
+          line-height: 1.25;
         }
 
         .invoice-billing h3 {
-          margin: 0 0 4px;
-          font-size: 11px;
+          margin: 0 0 3px;
+          font-size: 10px;
           text-transform: uppercase;
           letter-spacing: 0.04em;
         }
@@ -1350,8 +1314,8 @@ export default function InvoiceStudio() {
           width: 100%;
           border-collapse: collapse;
           table-layout: fixed;
-          margin-bottom: 8px;
-          font-size: 11px;
+          margin-bottom: 6px;
+          font-size: 10px;
         }
 
         .invoice-table thead tr {
@@ -1361,9 +1325,9 @@ export default function InvoiceStudio() {
         .invoice-table th,
         .invoice-table td {
           border: 1px solid #e5e7eb;
-          padding: 6px 8px;
+          padding: 5px 6px;
           text-align: left;
-          min-height: 32px;
+          min-height: 26px;
           vertical-align: top;
         }
 
@@ -1380,14 +1344,14 @@ export default function InvoiceStudio() {
         .invoice-totals {
           display: flex;
           justify-content: flex-end;
-          margin-bottom: 14px;
+          margin-bottom: 10px;
         }
 
         .invoice-totals-inner {
           width: 40%;
           min-width: 220px;
-          font-size: 11px;
-          line-height: 1.4;
+          font-size: 10px;
+          line-height: 1.25;
         }
 
         .invoice-totals-inner > div {
@@ -1397,7 +1361,7 @@ export default function InvoiceStudio() {
         }
 
         .invoice-total-row {
-          font-size: 16px;
+          font-size: 14px;
           font-weight: 700;
           border-top: 1px solid #d1d5db;
           padding-top: 4px;
@@ -1407,20 +1371,20 @@ export default function InvoiceStudio() {
         .invoice-bottom {
           display: grid;
           grid-template-columns: 50% 50%;
-          gap: 12px;
-          margin-top: auto;
+          gap: 10px;
+          margin-top: 8px;
         }
 
         .invoice-payment,
         .invoice-notes {
-          font-size: 11px;
-          line-height: 1.35;
+          font-size: 10px;
+          line-height: 1.25;
         }
 
         .invoice-payment h3,
         .invoice-notes h3 {
-          margin: 0 0 4px;
-          font-size: 11px;
+          margin: 0 0 3px;
+          font-size: 10px;
           text-transform: uppercase;
           letter-spacing: 0.04em;
         }
@@ -1429,20 +1393,24 @@ export default function InvoiceStudio() {
           margin: 1px 0;
         }
 
+        .invoice-payment-section-gap {
+          margin-top: 6px !important;
+        }
+
         .invoice-notes {
-          font-size: 10px;
+          font-size: 9px;
         }
 
         .invoice-notes p {
           margin: 0;
-          max-height: 70px;
+          max-height: 54px;
           overflow: hidden;
         }
 
         .invoice-footer {
           text-align: center;
-          margin-top: 12px;
-          font-size: 10px;
+          margin-top: 8px;
+          font-size: 9px;
         }
 
         .page-break {
@@ -1453,10 +1421,7 @@ export default function InvoiceStudio() {
         @media print {
           @page {
             size: A4;
-            margin-top: 20mm;
-            margin-right: 15mm;
-            margin-bottom: 20mm;
-            margin-left: 15mm;
+            margin: 0;
           }
 
           body {
@@ -1472,9 +1437,9 @@ export default function InvoiceStudio() {
             left: auto;
             visibility: visible;
             pointer-events: auto;
-            width: 210mm;
-            min-height: 297mm;
-            padding: 20mm 15mm;
+            width: var(--invoice-page-width);
+            min-height: var(--invoice-page-height);
+            padding: var(--invoice-padding-y) var(--invoice-padding-x);
             box-sizing: border-box;
           }
 
